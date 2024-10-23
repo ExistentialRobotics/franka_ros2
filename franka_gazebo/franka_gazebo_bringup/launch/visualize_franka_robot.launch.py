@@ -160,5 +160,6 @@ def generate_launch_description():
         os.path.join(get_package_share_directory('franka_description')))
 
     launch_description.add_action(set_env_vars_resources)
+    os.environ['GZ_SIM_RESOURCE_PATH'] = '/Panda_Arm/src'
 
     return launch_description
