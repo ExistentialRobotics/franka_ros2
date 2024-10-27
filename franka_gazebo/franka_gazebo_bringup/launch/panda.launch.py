@@ -23,13 +23,15 @@ from launch.event_handlers import OnProcessExit
 
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch import LaunchContext, LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import  LaunchConfiguration
 from launch.actions import AppendEnvironmentVariable
 from launch_ros.actions import Node
+# from launch_ros.substitutions import FindPackageShare
+# from uf_ros_lib.uf_robot_utils import get_xacro_command
 
 def get_robot_description(context: LaunchContext, arm_id, load_gripper, franka_hand):
     arm_id_str = context.perform_substitution(arm_id)
@@ -67,6 +69,23 @@ def get_robot_description(context: LaunchContext, arm_id, load_gripper, franka_h
     )
 
     return [robot_state_publisher]
+
+def build_camera_description(camera_namespace=""):
+    # Get the path to the camera xacro file
+    xacro_file_path = os.path.join(
+        get_package_share_directory('realsense2_description'),
+        'urdf',
+        'test_d455_camera.urdf.xacro'
+    )
+
+    # Process the xacro file with any necessary mappings
+    doc = xacro.process_file(xacro_file_path, mappings={'prefix': camera_namespace})
+    robot_description_xml = doc.toxml()
+
+    # Build the robot_description dictionary
+    camera_robot_description = {'robot_description': robot_description_xml}
+
+    return camera_robot_description
 
 
 def prepare_launch_description():
@@ -149,6 +168,60 @@ def prepare_launch_description():
         output='screen'
     )
 
+    camera_namespace = LaunchConfiguration('camera_namespace', default='camera_01')
+    camera_robot_description = build_camera_description(camera_namespace=camera_namespace)
+    
+    # Node for creating bridge between gazebo and ros2 (ros2 run ros_gz_bridge parameter_bridge)
+    parameters_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        output='screen',
+        arguments=[
+            [camera_namespace, '/camera_color@sensor_msgs/msg/Image@ignition.msgs.Image'],
+            [camera_namespace, '/camera_depth@sensor_msgs/msg/Image@ignition.msgs.Image'],
+            [camera_namespace, '/camera_depth/points@sensor_msgs/msg/PointCloud2@ignition.msgs.PointCloudPacked'],
+            [camera_namespace, '/camera_info@sensor_msgs/msg/CameraInfo@ignition.msgs.CameraInfo'],
+            [camera_namespace, '/camera_ired1@sensor_msgs/msg/Image@ignition.msgs.Image'],
+            [camera_namespace, '/camera_ired2@sensor_msgs/msg/Image@ignition.msgs.Image'],
+            '/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock',
+            '/model/sensor_d455/pose@tf2_msgs/msg/TFMessage[ignition.msgs.Pose_V',
+        ]
+    )
+
+    # Node for launching camera robot state publisher
+    robot_state_publisher_node_camera = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        output='screen',
+        namespace=camera_namespace,
+        parameters=[camera_robot_description]
+    )
+    
+    # Node for spawning the camera in gazebo environment
+    gazebo_spawn_camera_node = Node(
+        package='ros_gz_sim',
+        executable='create',
+        namespace=camera_namespace,
+        output='screen',
+        arguments=[
+            '-topic', 'robot_description',
+            '-allow_renaming', 'false',
+            '-x', '0.5',
+            '-y', '0.9',
+            '-z', '1.15',
+            '-R', '0.0',
+            '-P', '0.0',
+            '-Y', '-1.9',
+            '-timeout', '10000',
+        ],
+        parameters=[{'use_sim_time': True}],
+    )
+
+    delayed_spawn = TimerAction(
+        period=2.0,
+        actions=[gazebo_spawn_camera_node]
+    )
+
     return LaunchDescription([
         load_gripper_launch_argument,
         franka_hand_launch_argument,
@@ -158,6 +231,9 @@ def prepare_launch_description():
         robot_state_publisher,
         rviz,
         spawn,
+        parameters_bridge,
+        robot_state_publisher_node_camera,
+        delayed_spawn,
         RegisterEventHandler(
                 event_handler=OnProcessExit(
                     target_action=spawn,
@@ -176,7 +252,6 @@ def prepare_launch_description():
 
 def generate_launch_description():
     launch_description = prepare_launch_description()
-
     set_env_vars_resources = AppendEnvironmentVariable(
         'GZ_SIM_RESOURCE_PATH',
         os.path.join(get_package_share_directory('franka_description')))
