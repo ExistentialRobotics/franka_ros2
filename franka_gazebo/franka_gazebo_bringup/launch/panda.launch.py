@@ -167,6 +167,11 @@ def prepare_launch_description():
                 'joint_state_broadcaster'],
         output='screen'
     )
+    
+    load_traj_controller = ExecuteProcess(
+        cmd=['ros2', 'control', 'load_controller', '--set-state', 'active', 'traj_controller'],
+        output='screen'
+    )
 
     camera_namespace = LaunchConfiguration('camera_namespace', default='camera_01')
     camera_robot_description = build_camera_description(camera_namespace=camera_namespace)
@@ -237,7 +242,7 @@ def prepare_launch_description():
         RegisterEventHandler(
                 event_handler=OnProcessExit(
                     target_action=spawn,
-                    on_exit=[load_joint_state_broadcaster],
+                    on_exit=[load_joint_state_broadcaster,load_traj_controller],
                 )
         ),
         Node(
